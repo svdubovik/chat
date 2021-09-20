@@ -66,11 +66,14 @@ func (s *Server) handleConnection(nc net.Conn) {
 		s.logger.Error().Err(err)
 		return
 	}
-
 	s.clients = append(s.clients, client)
 	s.fanMsg(fmt.Sprintf("*** %s join to chat ***", client.user.Login))
 	s.directMsg(client, fmt.Sprintf("> Hello, %s\n", client.user.Login))
+	s.getMsg(client)
+	s.leave(client)
+}
 
+func (s *Server) getMsg(client *Client) {
 	for {
 		str, err := bufio.NewReader(client.conn).ReadString('\n')
 		if err != nil {
@@ -79,8 +82,6 @@ func (s *Server) handleConnection(nc net.Conn) {
 		}
 		s.fanMsg(fmt.Sprintf("%s> %s", client.user.Login, str))
 	}
-
-	s.leave(client)
 }
 
 func (s *Server) directMsg(client *Client, msg string) {

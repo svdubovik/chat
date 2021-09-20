@@ -6,9 +6,9 @@ import (
 	"svdubovik.com/chat/internal/server/tcp"
 )
 
-func main() {
-	const service = "ChatServer"
+const service = "ChatServer"
 
+func main() {
 	cfg := config.NewConfig(service)
 	logger := logger.NewLogger(cfg.LogLevel, cfg.LogFormat, cfg.Service)
 

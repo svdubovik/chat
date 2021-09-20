@@ -12,11 +12,8 @@ import (
 )
 
 type Client struct {
-	conn       net.Conn
-	chOut      chan string
-	chIn       chan string
-	authorized bool
-	user       models.User
+	conn net.Conn
+	user models.User
 }
 
 type Server struct {
@@ -41,87 +38,79 @@ func (s *Server) Run() (string, error) {
 	defer ln.Close()
 
 	s.logger.Info().Msgf("TCP Server started on %s", s.cfg.BindAddress)
-	defer s.logger.Info().Msg("Server stopped")
+	defer s.logger.Info().Msg("TCP Server stopped")
 
 	for {
-		s.logger.Debug().Msg("Starting accept conections")
-		conn, err := ln.Accept()
+		s.logger.Debug().Msg("Accept conections...")
+		c, err := ln.Accept()
 		if err != nil {
 			s.logger.Error().Err(err).Msg("Cannot accept new conection")
 			continue
 		}
 
-		client := &Client{
-			conn:  conn,
-			chOut: make(chan string),
-			chIn:  make(chan string),
-		}
-		s.clients = append(s.clients, client)
-
-		go s.handleConnection(client)
+		go s.handleConnection(c)
 	}
 }
 
-func (s *Server) handleConnection(client *Client) {
-	s.logger.Debug().Msg(fmt.Sprintf("Connection is accepted; RemoteAddr: %s", client.conn.RemoteAddr().String()))
+func (s *Server) handleConnection(nc net.Conn) {
+	remoteAddr := nc.RemoteAddr().String()
+	s.logger.Info().Str("RemoteAddr", remoteAddr).Msgf("Connection is accepted from: %s", remoteAddr)
 	defer func() {
-		client.conn.Close()
-		s.logger.Debug().Msg("Connection is closed")
+		nc.Close()
+		s.logger.Info().Str("RemoteAddr", remoteAddr).Msgf("Connection from %s is closed", remoteAddr)
 	}()
 
-	s.login(client)
-
-	if client.authorized {
-		fmt.Fprintf(client.conn, "Hello, %s\n", client.user.Login)
-	} else {
-		fmt.Fprintf(client.conn, "You are not authorized")
+	client, err := s.login(nc)
+	if err != nil {
+		fmt.Fprintf(nc, "You are not authorized")
+		s.logger.Error().Err(err)
 		return
 	}
 
-	go func() {
-		for {
-			fmt.Fprintf(client.conn, "# ")
-			str, err := bufio.NewReader(client.conn).ReadString('\n')
-			if err != nil {
-				s.logger.Error().Err(err).Msg("Cannot read network message")
-				close(client.chOut)
-				break
-			}
+	s.clients = append(s.clients, client)
+	s.fanMsg(fmt.Sprintf("*** %s join to chat ***", client.user.Login))
+	s.directMsg(client, fmt.Sprintf("> Hello, %s\n", client.user.Login))
 
-			client.chOut <- str
+	for {
+		str, err := bufio.NewReader(client.conn).ReadString('\n')
+		if err != nil {
+			s.logger.Error().Err(err)
+			break
 		}
-	}()
+		s.fanMsg(fmt.Sprintf("%s> %s", client.user.Login, str))
+	}
 
-	go func() {
-		for msg := range client.chIn {
-			fmt.Fprint(client.conn, msg)
-		}
-	}()
+	s.leave(client)
+}
 
-	for msg := range client.chOut {
-		for _, c := range s.clients {
-			if c.conn.RemoteAddr().String() != client.conn.RemoteAddr().String() {
-				c.chIn <- fmt.Sprintf("%s > %s", client.user.Login, msg)
-			}
-		}
+func (s *Server) directMsg(client *Client, msg string) {
+	fmt.Fprintf(client.conn, "%s\n", msg)
+}
+
+func (s *Server) fanMsg(msg string) {
+	for _, client := range s.clients {
+		s.directMsg(client, msg)
 	}
 }
 
-func (s *Server) login(client *Client) {
+func (s *Server) leave(client *Client) {
+	s.fanMsg(fmt.Sprintf("*** %s leave the chat ***", client.user.Login))
+}
+
+func (s *Server) login(nc net.Conn) (*Client, error) {
 	s.logger.Debug().Msg("Try to login")
 
-	fmt.Fprintf(client.conn, "Type your username: \n")
-	str, err := bufio.NewReader(client.conn).ReadString('\n')
+	fmt.Fprintf(nc, "> Type your username: \n")
+	str, err := bufio.NewReader(nc).ReadString('\n')
 	if err != nil {
-		s.logger.Error().Err(err).Msg("Cannot read network message")
-		return
+		return nil, err
 	}
 
-	// Authentification
+	client := &Client{
+		conn: nc,
+	}
 	client.user.Login = strings.TrimSpace(str)
 
-	// Authorization
-	client.authorized = true
-
 	s.logger.Debug().Msgf("%s is authorized", client.user.Login)
+	return client, nil
 }
